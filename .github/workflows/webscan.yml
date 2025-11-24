@@ -84,7 +84,7 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "1️⃣ WPScan - 기존 CVE 탐지"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        ./scripts/1_scan_wpscan.sh || true
+        ./scripts/1_wpscan.sh || true
       
     
     # 5. Nuclei (WordPress 템플릿)
@@ -94,7 +94,7 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "2️⃣ Nuclei - WordPress 템플릿"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        ./scripts/2_scan_nuclei.sh || true
+        ./scripts/2_nuclei.sh || true
     
     # 6. wfuzz (빠른 SQLi)
     - name: "Scan 3/5: wfuzz (Fast SQLi Screening)"
@@ -103,7 +103,7 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "3️⃣ wfuzz - 빠른 SQLi 스크리닝"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        ./scripts/3_scan_wfuzz.sh || true
+        ./scripts/3_wfuzz.sh || true
     
     # 7. Dalfox (XSS)
     - name: "Scan 4/5: Dalfox (XSS Detection)"
@@ -112,7 +112,7 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "4️⃣ Dalfox - XSS 탐지"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        ./scripts/4_scan_dalfox.sh || true
+        ./scripts/4_dalfox.sh || true
     
     # 8. SQLMap (SQLi 확인)
     - name: "Scan 5/5: SQLMap (SQLi Confirmation)"
@@ -121,7 +121,7 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "5️⃣ SQLMap - SQLi 확인"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        ./scripts/5_scan_sqlmap.sh || true
+        ./scripts/5_sqlmap.sh || true
     
     # 9. JSON 통합
     - name: Generate unified JSON report

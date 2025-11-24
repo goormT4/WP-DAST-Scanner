@@ -19,15 +19,15 @@ WFUZZ_JSON="${RESULTS_DIR}/wfuzz_results.json"
 DALFOX_JSON="${RESULTS_DIR}/dalfox_results.json"
 SQLMAP_JSON="${RESULTS_DIR}/sqlmap_results.json"
 
-# 임시 파일 사용
-TEMP_RESULTS="/tmp/dast_results_$$.json"
-> "$TEMP_RESULTS"  # 초기화
+# 임시 결과 파일
+TEMP_RESULTS="/tmp/dast_temp_results.json"
+> "$TEMP_RESULTS"
 
 # WPScan 결과 변환
 if [ -f "${WPSCAN_JSON}" ]; then
     echo "  📝 WPScan 결과 통합 중..."
     
-    jq -r '.plugins // {} | to_entries[] | 
+    jq -c '.plugins // {} | to_entries[] | 
       .key as $plugin | 
       .value.vulnerabilities[]? | 
       {
@@ -86,7 +86,7 @@ if [ -f "${WFUZZ_JSON}" ]; then
       start: {line: 0, col: 0},
       end: {line: 0, col: 0},
       extra: {
-        message: ("Time-based SQL Injection detected in parameter '" + .parameter + "' (Response: " + .response_time + ")"),
+        message: ("Time-based SQL Injection in " + .parameter),
         metadata: {
           tool: "wfuzz",
           cwe: "CWE-89",
@@ -112,7 +112,7 @@ if [ -f "${DALFOX_JSON}" ]; then
       start: {line: 0, col: 0},
       end: {line: 0, col: 0},
       extra: {
-        message: ("Reflected XSS detected in parameter '" + .parameter + "'"),
+        message: ("Reflected XSS in " + .parameter),
         metadata: {
           tool: "dalfox",
           cwe: "CWE-79",
@@ -137,7 +137,7 @@ if [ -f "${SQLMAP_JSON}" ]; then
       start: {line: 0, col: 0},
       end: {line: 0, col: 0},
       extra: {
-        message: ("SQL Injection confirmed by SQLMap in parameter '" + .parameter + "' (DBMS: " + .dbms + ")"),
+        message: ("SQL Injection confirmed in " + .parameter + " (DBMS: " + .dbms + ")"),
         metadata: {
           tool: "sqlmap",
           cwe: "CWE-89",
@@ -156,37 +156,32 @@ fi
 # 최종 JSON 생성
 echo "  ✅ 최종 JSON 생성 중..."
 
-cat > "${OUTPUT_JSON}" << 'JSON_START'
+# JSON 시작
+cat > "${OUTPUT_JSON}" << JSONSTART
 {
   "version": "1.0.0",
   "scan_type": "DAST",
   "tool": "wpscan + nuclei + wfuzz + dalfox + sqlmap",
-  "timestamp": "JSON_START
-echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "${OUTPUT_JSON}"
-cat >> "${OUTPUT_JSON}" << JSON_MID
-",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "target": "${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}",
   "results": [
-JSON_MID
+JSONSTART
 
-# 임시 결과 파일을 배열 형태로 삽입
+# 임시 결과를 배열로 변환
 if [ -s "$TEMP_RESULTS" ]; then
-    # jq로 각 줄을 읽어서 배열로 만들기
-    jq -s '.' "$TEMP_RESULTS" | jq '.[]' | jq -s '.' | jq '.[]' | \
+    jq -s '.' "$TEMP_RESULTS" 2>/dev/null | jq '.[]' | \
     awk 'NR>1{print ","} {printf "%s", $0}' >> "${OUTPUT_JSON}"
 fi
 
-cat >> "${OUTPUT_JSON}" << 'JSON_END'
+# JSON 종료
+cat >> "${OUTPUT_JSON}" << JSONEND
   ],
   "errors": [],
   "paths": {
-    "scanned": ["
-JSON_END
-echo "${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}\"" >> "${OUTPUT_JSON}"
-cat >> "${OUTPUT_JSON}" << 'JSON_FINAL'
-  ]
+    "scanned": ["${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}"]
+  }
 }
-JSON_FINAL
+JSONEND
 
 rm -f "$TEMP_RESULTS"
 
