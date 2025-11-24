@@ -1,6 +1,4 @@
 #!/bin/bash
-# 1_wpscan.sh - WPScan으로 기존 CVE 탐지
-
 set -e
 
 TARGET_BASE="${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}"
@@ -10,33 +8,33 @@ OUTPUT_JSON="${RESULTS_DIR}/wpscan_results.json"
 mkdir -p "${RESULTS_DIR}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔍 WPScan - 기존 CVE 탐지"
+echo "🔍 WPScan - 빠른 스캔 ⚡"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Target: ${TARGET_BASE}"
 echo ""
 
-# WPScan 명령어 (인증 기능 제거)
+# 빠른 스캔 (플러그인만, mixed 모드)
 WPSCAN_CMD="wpscan --url ${TARGET_BASE} \
     --format json \
     --output ${OUTPUT_JSON} \
-    --enumerate ap,at,cb,dbe \
-    --plugins-detection aggressive \
-    --plugins-version-detection aggressive \
-    --random-user-agent"
+    --enumerate p \
+    --plugins-detection mixed \
+    --random-user-agent \
+    --max-threads 10 \
+    --request-timeout 10 \
+    --connect-timeout 10"
 
-# API Token 추가
 WPSCAN_API_TOKEN="${WPSCAN_API_TOKEN:-}"
 if [ -n "$WPSCAN_API_TOKEN" ]; then
-    echo "✅ API Token 사용"
+    echo "✅ API Token (빠른 모드)"
     WPSCAN_CMD="$WPSCAN_CMD --api-token ${WPSCAN_API_TOKEN}"
 else
     echo "⚠️  무료 모드"
     WPSCAN_CMD="$WPSCAN_CMD --no-update"
 fi
 
-# 실행
 echo ""
-echo "실행 중..."
+echo "실행 중... (2-3분 예상)"
 eval $WPSCAN_CMD 2>&1 || true
 
 echo ""
