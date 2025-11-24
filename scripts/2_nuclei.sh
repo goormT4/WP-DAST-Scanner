@@ -1,5 +1,5 @@
 #!/bin/bash
-# 2_scan_nuclei.sh - Nuclei WordPress 템플릿으로 CVE 탐지
+# 2_nuclei.sh - Nuclei WordPress 템플릿으로 CVE 탐지
 
 set -e
 
@@ -22,13 +22,13 @@ nuclei -update-templates 2>&1 | tail -1
 echo ""
 echo "🔍 WordPress 관련 템플릿 스캔 중..."
 
-# WordPress 관련 템플릿만 실행
+# WordPress 관련 템플릿 실행 (jsonl 형식 사용)
 nuclei -u "${TARGET_BASE}" \
     -t cves/ \
     -t wordpress/ \
     -t vulnerabilities/ \
     -tags wordpress,wp,wp-plugin,cve \
-    -json \
+    -jsonl \
     -o "${OUTPUT_JSON}" \
     -silent \
     2>&1 || true
@@ -42,7 +42,6 @@ if [ -f "${OUTPUT_JSON}" ]; then
     vuln_count=$(wc -l < "${OUTPUT_JSON}" 2>/dev/null || echo 0)
     echo "발견된 취약점: ${vuln_count}개"
     
-    # 템플릿 ID 목록
     if [ "$vuln_count" -gt 0 ]; then
         echo ""
         echo "템플릿 ID:"

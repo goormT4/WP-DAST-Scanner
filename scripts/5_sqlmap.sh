@@ -18,33 +18,6 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Target: ${TARGET_BASE}"
 echo ""
 
-# 로그인해서 쿠키 얻기
-COOKIE_HEADER=""
-if [ -n "$WP_USERNAME" ] && [ -n "$WP_PASSWORD" ]; then
-    echo "🔑 WordPress 로그인 중..."
-    
-    curl -s -c /tmp/wp_cookies.txt \
-        -d "log=${WP_USERNAME}&pwd=${WP_PASSWORD}&wp-submit=Log+In" \
-        "${TARGET_BASE}/wp-login.php" > /dev/null 2>&1 || true
-    
-    if [ -f /tmp/wp_cookies.txt ]; then
-        COOKIE_VALUE=$(grep "wordpress_logged_in" /tmp/wp_cookies.txt | awk '{print $7}' 2>/dev/null || true)
-        
-        if [ -n "$COOKIE_VALUE" ]; then
-            COOKIE_NAME=$(grep "wordpress_logged_in" /tmp/wp_cookies.txt | awk '{print $6}' 2>/dev/null || true)
-            COOKIE_HEADER="${COOKIE_NAME}=${COOKIE_VALUE}"
-            echo "✅ 로그인 성공!"
-        else
-            echo "⚠️  로그인 실패"
-        fi
-        rm -f /tmp/wp_cookies.txt
-    fi
-else
-    echo "⚠️  비인증 스캔"
-fi
-
-echo ""
-
 # wfuzz 결과 확인
 if [ ! -f "${WFUZZ_RESULTS}" ]; then
     echo "⚠️  wfuzz 결과 없음. SQLMap 스킵."
@@ -54,6 +27,22 @@ if [ ! -f "${WFUZZ_RESULTS}" ]; then
   "target": "'${TARGET_BASE}'",
   "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
   "results": []
+}' > "${OUTPUT_JSON}"
+    exit 0
+fi
+
+# wfuzz에서 발견된 취약점이 있는지 확인
+vuln_count=$(jq '.results | length' "${WFUZZ_RESULTS}" 2>/dev/null || echo 0)
+
+if [ "$vuln_count" -eq 0 ]; then
+    echo "ℹ️  wfuzz에서 발견된 취약점 없음. SQLMap 스킵."
+    echo '{
+  "scan_type": "sqli_confirmed",
+  "tool": "sqlmap",
+  "target": "'${TARGET_BASE}'",
+  "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+  "results": [],
+  "note": "No vulnerable endpoints from wfuzz"
 }' > "${OUTPUT_JSON}"
     exit 0
 fi
@@ -78,9 +67,9 @@ jq -c '.results[]?' "${WFUZZ_RESULTS}" 2>/dev/null | while read -r vuln; do
     echo "Testing: ${param}"
     echo "  URL: ${full_url}"
     
-    # SQLMap 명령어 구성
-    SQLMAP_CMD="sqlmap -u ${full_url} \
-        -p ${param} \
+    # SQLMap 실행
+    sqlmap_output=$(sqlmap -u "${full_url}" \
+        -p "${param}" \
         --batch \
         --level=1 \
         --risk=1 \
@@ -88,16 +77,8 @@ jq -c '.results[]?' "${WFUZZ_RESULTS}" 2>/dev/null | while read -r vuln; do
         --time-sec=5 \
         --timeout=10 \
         --retries=1 \
-        --flush-session"
-    
-    # 쿠키 추가
-    if [ -n "$COOKIE_HEADER" ]; then
-        echo "  🔑 인증된 요청"
-        SQLMAP_CMD="$SQLMAP_CMD --cookie=\"${COOKIE_HEADER}\""
-    fi
-    
-    # 실행
-    sqlmap_output=$(eval $SQLMAP_CMD 2>&1 || true)
+        --flush-session \
+        2>&1 || true)
     
     if echo "$sqlmap_output" | grep -iq "parameter '${param}' is vulnerable"; then
         confirmed_count=$((confirmed_count + 1))
@@ -111,17 +92,17 @@ jq -c '.results[]?' "${WFUZZ_RESULTS}" 2>/dev/null | while read -r vuln; do
         
         dbms=$(echo "$sqlmap_output" | grep -oP "back-end DBMS: \K[^']*" | head -1 || echo "unknown")
         
-        cat >> "${OUTPUT_JSON}" << JSONEOF
+        cat >> "${OUTPUT_JSON}" << JSONEOF3
     {
       "url": "${full_url}",
       "parameter": "${param}",
       "dbms": "${dbms}",
-      "authenticated": $([ -n "$COOKIE_HEADER" ] && echo "true" || echo "false"),
+      "authenticated": false,
       "vulnerability": "sqli-confirmed",
       "severity": "CRITICAL",
       "zero_day_candidate": true
     }
-JSONEOF
+JSONEOF3
     else
         echo "  ℹ️  확인 실패"
     fi

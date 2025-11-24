@@ -1,5 +1,5 @@
 #!/bin/bash
-# 3_scan_wfuzz.sh - wfuzz 파라미터 퍼징 및 빠른 SQLi 테스트
+# 3_wfuzz.sh - wfuzz 파라미터 퍼징 및 빠른 SQLi 테스트
 
 set -e
 
@@ -13,6 +13,25 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "⚡ wfuzz - 파라미터 퍼징 & 빠른 SQLi"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Target: ${TARGET_BASE}"
+echo ""
+
+# 타겟 연결 확인
+echo "🔗 타겟 서버 연결 확인 중..."
+if curl -s --max-time 5 "${TARGET_BASE}" > /dev/null 2>&1; then
+    echo "✅ 서버 접근 가능"
+else
+    echo "❌ 서버 접근 불가! 타겟 URL 확인 필요"
+    echo '{
+  "scan_type": "parameter_fuzzing",
+  "tool": "wfuzz",
+  "target": "'${TARGET_BASE}'",
+  "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+  "results": [],
+  "error": "Target unreachable"
+}' > "${OUTPUT_JSON}"
+    exit 0
+fi
+
 echo ""
 
 # 테스트 대상 엔드포인트
@@ -52,7 +71,7 @@ for name in "${!ENDPOINTS[@]}"; do
     duration=$(echo "$end - $start" | bc 2>/dev/null || echo "0")
     duration_int=$(printf "%.0f" "$duration" 2>/dev/null || echo "0")
     
-    echo "  Response time: ${duration}s"
+    echo "  Response time: ${duration}s (threshold: 5s)"
     
     # 5초 이상이면 취약
     if [ "$duration_int" -ge 5 ]; then
@@ -65,7 +84,7 @@ for name in "${!ENDPOINTS[@]}"; do
         
         echo "  🚨 Time-based SQLi 발견!"
         
-        cat >> "${OUTPUT_JSON}" << EOF
+        cat >> "${OUTPUT_JSON}" << JSONEOF
     {
       "endpoint": "${name}",
       "url": "${TARGET_BASE}${endpoint}",
@@ -76,9 +95,9 @@ for name in "${!ENDPOINTS[@]}"; do
       "severity": "HIGH",
       "potential_zero_day": true
     }
-EOF
+JSONEOF
     else
-        echo "  ✅ 안전"
+        echo "  ✅ 안전 (${duration}s < 5s)"
     fi
     echo ""
 done

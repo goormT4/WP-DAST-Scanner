@@ -1,5 +1,5 @@
 #!/bin/bash
-# 4_scan_dalfox.sh - Dalfox XSS 탐지
+# 4_dalfox.sh - Dalfox XSS 탐지
 
 set -e
 
@@ -37,37 +37,46 @@ for url in "${TEST_URLS[@]}"; do
     echo "Testing XSS: ${url}"
     
     # Dalfox 실행
-    dalfox url "${url}" \
+    dalfox_output=$(dalfox url "${url}" \
         --silence \
         --format json \
-        --output /tmp/dalfox_temp.json 2>/dev/null || true
+        2>/dev/null || echo '[]')
     
-    if [ -f /tmp/dalfox_temp.json ] && [ -s /tmp/dalfox_temp.json ]; then
-        # 결과 파싱
-        jq -c '.[]?' /tmp/dalfox_temp.json 2>/dev/null | while read -r vuln; do
-            if [ "$first" = false ]; then
-                echo "," >> "${OUTPUT_JSON}"
-            fi
-            first=false
-            total_xss=$((total_xss + 1))
+    # 유효한 JSON인지 확인
+    if echo "$dalfox_output" | jq empty 2>/dev/null; then
+        # 결과가 있는지 확인
+        result_count=$(echo "$dalfox_output" | jq '. | length' 2>/dev/null || echo 0)
+        
+        if [ "$result_count" -gt 0 ]; then
+            echo "  🚨 XSS 발견: ${result_count}개"
             
-            param=$(echo "$vuln" | jq -r '.param // "unknown"')
-            payload=$(echo "$vuln" | jq -r '.payload // ""')
-            
-            echo "  🚨 XSS 발견: ${param}"
-            
-            cat >> "${OUTPUT_JSON}" << EOF
+            # 각 결과 처리
+            echo "$dalfox_output" | jq -c '.[]' 2>/dev/null | while read -r vuln; do
+                if [ "$first" = false ]; then
+                    echo "," >> "${OUTPUT_JSON}"
+                fi
+                first=false
+                total_xss=$((total_xss + 1))
+                
+                param=$(echo "$vuln" | jq -r '.param // "unknown"' 2>/dev/null)
+                payload=$(echo "$vuln" | jq -r '.payload // ""' 2>/dev/null)
+                
+                cat >> "${OUTPUT_JSON}" << JSONEOF2
     {
       "url": "${url}",
       "parameter": "${param}",
-      "payload": $(echo "$payload" | jq -R .),
+      "payload": $(echo "$payload" | jq -R . 2>/dev/null || echo '""'),
       "vulnerability": "reflected-xss",
       "severity": "MEDIUM",
       "potential_zero_day": false
     }
-EOF
-        done
-        rm -f /tmp/dalfox_temp.json
+JSONEOF2
+            done
+        else
+            echo "  ✅ 안전"
+        fi
+    else
+        echo "  ⚠️  Dalfox 결과 파싱 실패"
     fi
 done
 
