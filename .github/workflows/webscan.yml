@@ -43,9 +43,6 @@ jobs:
         go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
         sudo ln -s ~/go/bin/nuclei /usr/local/bin/nuclei || true
         
-        # wfuzz
-        echo "▶ wfuzz..."
-        sudo apt-get install -y wfuzz
         
         # Dalfox
         echo "▶ Dalfox..."
