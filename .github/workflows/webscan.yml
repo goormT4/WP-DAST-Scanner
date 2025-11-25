@@ -10,10 +10,10 @@ permissions:
 
 jobs:
   dast-scan:
-    runs-on: ubuntu-latest
+    # [수정 1] ubuntu-latest -> self-hosted (내 EC2 러너 사용)
+    runs-on: self-hosted
     
     env:
-      # GitHub Secrets에서 가져오기
       TARGET_BASE: ${{ secrets.TARGET_URL }}
       WP_USERNAME: ${{ secrets.WP_USERNAME }}
       WP_PASSWORD: ${{ secrets.WP_PASSWORD }}
@@ -25,49 +25,40 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
     
-    # 2. 도구 설치
-    - name: Install dependencies
+    # [수정 2] 디버깅: 진짜 연결되는지 눈으로 확인하기
+    - name: 🔍 Check Connection & URL
       run: |
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📦 도구 설치 중..."
+        echo "🕵️ 연결 테스트 및 URL 확인"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        # Secrets는 ***로 가려지지만, curl 접속 로그(Connected to...)를 통해 IP 확인 가능
+        curl -I -v --connect-timeout 5 ${{ secrets.TARGET_URL }} || echo "❌ 연결 실패! 주소나 방화벽을 확인하세요."
+
+    # 2. 도구 설치 (컨테이너 방식이 아니므로, 이미 설치되어 있다면 패스됨)
+    - name: Install dependencies
+      run: |
+        echo "📦 도구 설치/업데이트 중..."
         
         sudo apt-get update -qq
         
         # WPScan
-        echo "▶ WPScan..."
-        sudo gem install wpscan
+        sudo gem install wpscan || echo "WPScan already installed or error"
         
         # Nuclei
-        echo "▶ Nuclei..."
         go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-        sudo ln -s ~/go/bin/nuclei /usr/local/bin/nuclei || true
-        
+        sudo ln -sf ~/go/bin/nuclei /usr/local/bin/nuclei || true
+        # [수정 3] Nuclei 템플릿 업데이트 (필수)
+        nuclei -update-templates
         
         # Dalfox
-        echo "▶ Dalfox..."
         go install github.com/hahwul/dalfox/v2@latest
-        sudo ln -s ~/go/bin/dalfox /usr/local/bin/dalfox || true
+        sudo ln -sf ~/go/bin/dalfox /usr/local/bin/dalfox || true
         
-        # SQLMap
-        echo "▶ SQLMap..."
-        sudo apt-get install -y sqlmap
+        # SQLMap & Utils
+        sudo apt-get install -y sqlmap jq bc python3-requests
         
-        # 기타 유틸리티
-        echo "▶ Utilities..."
-        sudo apt-get install -y jq bc python3-requests
-        
-        echo ""
-        echo "✅ 도구 설치 완료!"
-        
-        # 버전 확인
-        echo ""
-        echo "도구 버전:"
-        wpscan --version || true
-        nuclei -version || true
-        dalfox version || true
-        sqlmap --version | head -1 || true
-    
+        echo "✅ 도구 준비 완료!"
+
     # 3. 준비
     - name: Prepare directories & permissions
       run: |
@@ -78,68 +69,43 @@ jobs:
     # 4. WPScan (기존 CVE)
     - name: "Scan 1/5: WPScan (Known CVE)"
       run: |
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "1️⃣ WPScan - 기존 CVE 탐지"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "1️⃣ WPScan Start"
         ./scripts/1_wpscan.sh || true
       
-    
     # 5. Nuclei (WordPress 템플릿)
     - name: "Scan 2/5: Nuclei (WordPress Templates)"
       run: |
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "2️⃣ Nuclei - WordPress 템플릿"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "2️⃣ Nuclei Start"
         ./scripts/2_nuclei.sh || true
     
     # 6. wfuzz (빠른 SQLi)
     - name: "Scan 3/5: wfuzz (Fast SQLi Screening)"
       run: |
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "3️⃣ wfuzz - 빠른 SQLi 스크리닝"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "3️⃣ wfuzz Start"
         ./scripts/3_wfuzz.sh || true
     
     # 7. Dalfox (XSS)
     - name: "Scan 4/5: Dalfox (XSS Detection)"
       run: |
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "4️⃣ Dalfox - XSS 탐지"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "4️⃣ Dalfox Start"
         ./scripts/4_dalfox.sh || true
     
     # 8. SQLMap (SQLi 확인)
     - name: "Scan 5/5: SQLMap (SQLi Confirmation)"
       run: |
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "5️⃣ SQLMap - SQLi 확인"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "5️⃣ SQLMap Start"
         ./scripts/5_sqlmap.sh || true
     
     # 9. JSON 통합
     - name: Generate unified JSON report
       run: |
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📊 JSON 통합 (semgrep 형태)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         ./scripts/6_generate_json.sh
-        
-        echo ""
         echo "결과 미리보기:"
-        jq -C '. | {total: (.results | length), zero_day: [.results[] | select(.extra.metadata.zero_day == true)] | length}' results/dast_results.json || true
+        jq -C '. | {total: (.results | length)}' results/dast_results.json || true
     
     # 10. 서버 업로드
     - name: Upload results to dashboard
       run: |
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📤 서버 업로드"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         python3 scripts/7_upload.py results/dast_results.json
       continue-on-error: true
     
@@ -155,27 +121,4 @@ jobs:
     - name: Print summary
       if: always()
       run: |
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "✅ 스캔 완료!"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        
-        if [ -f results/dast_results.json ]; then
-          echo "📊 최종 통계:"
-          jq -r '
-            "  총 취약점: \(.results | length)개",
-            "  제로데이: \([.results[] | select(.extra.metadata.zero_day == true)] | length)개",
-            "  Critical: \([.results[] | select(.extra.severity == "CRITICAL")] | length)개",
-            "  High: \([.results[] | select(.extra.severity == "HIGH")] | length)개"
-          ' results/dast_results.json || true
-          
-          echo ""
-          echo "📥 결과 다운로드:"
-          echo "  Actions 탭 → Artifacts → 'dast-scan-results-${{ github.run_number }}'"
-        else
-          echo "⚠️  결과 파일이 생성되지 않았습니다."
-        fi
-        
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
