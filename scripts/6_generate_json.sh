@@ -1,6 +1,4 @@
 #!/bin/bash
-# 6_generate_json.sh - 모든 스캔 결과를 semgrep 형태로 통합
-
 set -e
 
 RESULTS_DIR="results"
@@ -13,199 +11,211 @@ echo "📊 JSON 통합 (semgrep 형태)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-WPSCAN_JSON="${RESULTS_DIR}/wpscan_results.json"
-NUCLEI_JSON="${RESULTS_DIR}/nuclei_results.json"
-WFUZZ_JSON="${RESULTS_DIR}/wfuzz_results.json"
-DALFOX_JSON="${RESULTS_DIR}/dalfox_results.json"
-SQLMAP_JSON="${RESULTS_DIR}/sqlmap_results.json"
+# 임시 배열 파일
+TEMP_RESULTS="/tmp/dast_temp_results_$$.json"
+echo '[]' > "$TEMP_RESULTS"
 
-# 임시 결과 파일
-TEMP_RESULTS="/tmp/dast_temp_results.json"
-> "$TEMP_RESULTS"
-
-# WPScan 결과 변환
-if [ -f "${WPSCAN_JSON}" ]; then
-    echo "  📝 WPScan 결과 통합 중..."
+# 1. Nuclei 변환
+echo "  📝 Nuclei 결과 통합 중..."
+if [ -f "${RESULTS_DIR}/nuclei_results.json" ] && [ -s "${RESULTS_DIR}/nuclei_results.json" ]; then
+    NUCLEI_CONVERTED="/tmp/nuclei_converted_$$.json"
     
-    jq -c '.plugins // {} | to_entries[] | 
-      .key as $plugin | 
-      .value.vulnerabilities[]? | 
-      {
-        check_id: "wpscan.known-cve",
-        path: $plugin,
+    jq -s 'map({
+      check_id: ("nuclei." + .["template-id"]),
+      path: (.["matched-at"] // "N/A"),
+      start: {line: 0, col: 0},
+      end: {line: 0, col: 0},
+      extra: {
+        message: (.info.name // "Unknown vulnerability"),
+        metadata: {
+          tool: "nuclei",
+          template_id: (.["template-id"] // "unknown"),
+          zero_day: false
+        },
+        severity: ((.info.severity // "info") | ascii_upcase),
+        fingerprint: ("nuclei-" + (.["template-id"] // "unknown")),
+        lines: "N/A (Dynamic Analysis)"
+      }
+    })' "${RESULTS_DIR}/nuclei_results.json" > "$NUCLEI_CONVERTED" 2>/dev/null || echo '[]' > "$NUCLEI_CONVERTED"
+    
+    jq -s '.[0] + .[1]' "$TEMP_RESULTS" "$NUCLEI_CONVERTED" > /tmp/temp_merge.json
+    mv /tmp/temp_merge.json "$TEMP_RESULTS"
+    rm -f "$NUCLEI_CONVERTED"
+fi
+
+# 2. WPScan 변환
+echo "  📝 WPScan 결과 통합 중..."
+if [ -f "${RESULTS_DIR}/wpscan_results.json" ] && [ -s "${RESULTS_DIR}/wpscan_results.json" ]; then
+    WPSCAN_CONVERTED="/tmp/wpscan_converted_$$.json"
+    
+    jq '[.plugins // {} | to_entries[] | .value as $plugin | .key as $pname | 
+      ($plugin.vulnerabilities // [])[] | {
+        check_id: ("wpscan.cve." + (.title // "unknown" | gsub("[^a-zA-Z0-9]"; "-"))),
+        path: ("Plugin: " + $pname),
         start: {line: 0, col: 0},
         end: {line: 0, col: 0},
         extra: {
-          message: .title,
+          message: (.title // "Unknown vulnerability"),
           metadata: {
             tool: "wpscan",
-            cve: (.references.cve[0] // "N/A"),
-            plugin: $plugin,
+            plugin: $pname,
+            vuln_type: (.vuln_type // "unknown"),
             zero_day: false
           },
-          severity: (if .cvss.score >= 9 then "CRITICAL" 
-                     elif .cvss.score >= 7 then "HIGH"
-                     elif .cvss.score >= 4 then "MEDIUM"
-                     else "LOW" end),
-          fingerprint: ("wpscan-" + (.references.cve[0] // "N/A")),
+          severity: "HIGH",
+          fingerprint: ("wpscan-" + ($pname // "unknown")),
           lines: "N/A (Dynamic Analysis)"
         }
-      }' "${WPSCAN_JSON}" 2>/dev/null >> "$TEMP_RESULTS" || true
-fi
-
-# Nuclei 결과 변환
-if [ -f "${NUCLEI_JSON}" ] && [ -s "${NUCLEI_JSON}" ]; then
-    echo "  📝 Nuclei 결과 통합 중..."
-    
-    jq -c '{
-      check_id: ("nuclei." + .["template-id"]),
-      path: .["matched-at"],
-      start: {line: 0, col: 0},
-      end: {line: 0, col: 0},
-      extra: {
-        message: .info.name,
-        metadata: {
-          tool: "nuclei",
-          template_id: .["template-id"],
-          zero_day: false
-        },
-        severity: (.info.severity | ascii_upcase),
-        fingerprint: ("nuclei-" + .["template-id"]),
-        lines: "N/A (Dynamic Analysis)"
       }
-    }' "${NUCLEI_JSON}" 2>/dev/null >> "$TEMP_RESULTS" || true
+    ]' "${RESULTS_DIR}/wpscan_results.json" > "$WPSCAN_CONVERTED" 2>/dev/null || echo '[]' > "$WPSCAN_CONVERTED"
+    
+    jq -s '[.[0][], .[1][]]' "$TEMP_RESULTS" "$WPSCAN_CONVERTED" > /tmp/temp_merge.json
+    mv /tmp/temp_merge.json "$TEMP_RESULTS"
+    rm -f "$WPSCAN_CONVERTED"
 fi
 
-# wfuzz 결과 변환
-if [ -f "${WFUZZ_JSON}" ]; then
-    echo "  📝 wfuzz 결과 통합 중..."
+# 3. wfuzz 변환
+echo "  📝 wfuzz 결과 통합 중..."
+if [ -f "${RESULTS_DIR}/wfuzz_results.json" ] && [ -s "${RESULTS_DIR}/wfuzz_results.json" ]; then
+    WFUZZ_CONVERTED="/tmp/wfuzz_converted_$$.json"
     
-    jq -c '.results[]? | {
-      check_id: "dast.sqli-time-based",
-      path: .url,
+    jq '[.results[] | {
+      check_id: ("wfuzz.sqli." + (.parameter // "unknown")),
+      path: (.url // "N/A"),
       start: {line: 0, col: 0},
       end: {line: 0, col: 0},
       extra: {
-        message: ("Time-based SQL Injection in " + .parameter),
+        message: ("Time-based SQL Injection in parameter: " + (.parameter // "unknown")),
         metadata: {
           tool: "wfuzz",
-          cwe: "CWE-89",
-          parameter: .parameter,
-          payload: .payload,
-          response_time: .response_time,
-          zero_day: true
+          parameter: (.parameter // "unknown"),
+          payload: (.payload // ""),
+          response_time: (.response_time // "unknown"),
+          zero_day: (.potential_zero_day // true)
         },
-        severity: "HIGH",
-        fingerprint: ("sqli-" + .parameter),
+        severity: (.severity // "HIGH"),
+        fingerprint: ("wfuzz-" + (.parameter // "unknown")),
         lines: "N/A (Dynamic Analysis)"
       }
-    }' "${WFUZZ_JSON}" 2>/dev/null >> "$TEMP_RESULTS" || true
+    }]' "${RESULTS_DIR}/wfuzz_results.json" > "$WFUZZ_CONVERTED" 2>/dev/null || echo '[]' > "$WFUZZ_CONVERTED"
+    
+    jq -s '[.[0][], .[1][]]' "$TEMP_RESULTS" "$WFUZZ_CONVERTED" > /tmp/temp_merge.json
+    mv /tmp/temp_merge.json "$TEMP_RESULTS"
+    rm -f "$WFUZZ_CONVERTED"
 fi
 
-# Dalfox 결과 변환
-if [ -f "${DALFOX_JSON}" ]; then
-    echo "  📝 Dalfox 결과 통합 중..."
+# 4. Dalfox 변환
+echo "  📝 Dalfox 결과 통합 중..."
+if [ -f "${RESULTS_DIR}/dalfox_results.json" ] && [ -s "${RESULTS_DIR}/dalfox_results.json" ]; then
+    DALFOX_CONVERTED="/tmp/dalfox_converted_$$.json"
     
-    jq -c '.results[]? | {
-      check_id: "dast.xss-reflected",
-      path: .url,
+    jq '[.results[] | {
+      check_id: ("dalfox.xss." + (.parameter // "unknown")),
+      path: (.url // "N/A"),
       start: {line: 0, col: 0},
       end: {line: 0, col: 0},
       extra: {
-        message: ("Reflected XSS in " + .parameter),
+        message: ("XSS vulnerability in parameter: " + (.parameter // "unknown")),
         metadata: {
           tool: "dalfox",
-          cwe: "CWE-79",
-          parameter: .parameter,
-          payload: .payload,
-          zero_day: false
+          parameter: (.parameter // "unknown"),
+          payload: (.payload // ""),
+          zero_day: (.potential_zero_day // false)
         },
-        severity: "MEDIUM",
-        fingerprint: ("xss-" + .parameter),
+        severity: (.severity // "MEDIUM"),
+        fingerprint: ("dalfox-" + (.parameter // "unknown")),
         lines: "N/A (Dynamic Analysis)"
       }
-    }' "${DALFOX_JSON}" 2>/dev/null >> "$TEMP_RESULTS" || true
+    }]' "${RESULTS_DIR}/dalfox_results.json" > "$DALFOX_CONVERTED" 2>/dev/null || echo '[]' > "$DALFOX_CONVERTED"
+    
+    jq -s '[.[0][], .[1][]]' "$TEMP_RESULTS" "$DALFOX_CONVERTED" > /tmp/temp_merge.json
+    mv /tmp/temp_merge.json "$TEMP_RESULTS"
+    rm -f "$DALFOX_CONVERTED"
 fi
 
-# SQLMap 결과 변환
-if [ -f "${SQLMAP_JSON}" ]; then
-    echo "  📝 SQLMap 결과 통합 중..."
+# 5. SQLMap 변환
+echo "  📝 SQLMap 결과 통합 중..."
+if [ -f "${RESULTS_DIR}/sqlmap_results.json" ] && [ -s "${RESULTS_DIR}/sqlmap_results.json" ]; then
+    SQLMAP_CONVERTED="/tmp/sqlmap_converted_$$.json"
     
-    jq -c '.results[]? | {
-      check_id: "dast.sqli-confirmed",
-      path: .url,
+    jq '[.results[] | {
+      check_id: ("sqlmap.sqli." + (.parameter // "unknown")),
+      path: (.url // "N/A"),
       start: {line: 0, col: 0},
       end: {line: 0, col: 0},
       extra: {
-        message: ("SQL Injection confirmed in " + .parameter + " (DBMS: " + .dbms + ")"),
+        message: ("Confirmed SQL Injection in parameter: " + (.parameter // "unknown")),
         metadata: {
           tool: "sqlmap",
-          cwe: "CWE-89",
-          parameter: .parameter,
-          dbms: .dbms,
-          exploitable: true,
-          zero_day: true
+          parameter: (.parameter // "unknown"),
+          technique: (.technique // "unknown"),
+          confirmed: (.confirmed // true),
+          zero_day: (.potential_zero_day // true)
         },
-        severity: "CRITICAL",
-        fingerprint: ("sqli-confirmed-" + .parameter),
+        severity: (.severity // "CRITICAL"),
+        fingerprint: ("sqlmap-" + (.parameter // "unknown")),
         lines: "N/A (Dynamic Analysis)"
       }
-    }' "${SQLMAP_JSON}" 2>/dev/null >> "$TEMP_RESULTS" || true
+    }]' "${RESULTS_DIR}/sqlmap_results.json" > "$SQLMAP_CONVERTED" 2>/dev/null || echo '[]' > "$SQLMAP_CONVERTED"
+    
+    jq -s '[.[0][], .[1][]]' "$TEMP_RESULTS" "$SQLMAP_CONVERTED" > /tmp/temp_merge.json
+    mv /tmp/temp_merge.json "$TEMP_RESULTS"
+    rm -f "$SQLMAP_CONVERTED"
 fi
 
-# 최종 JSON 생성
 echo "  ✅ 최종 JSON 생성 중..."
 
-# JSON 시작
-cat > "${OUTPUT_JSON}" << JSONSTART
+# 최종 JSON 생성 (완벽한 문법)
+jq '{
+  version: "1.0.0",
+  scan_type: "DAST",
+  tool: "nuclei + wpscan + wfuzz + dalfox + sqlmap",
+  timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
+  target: "'"${TARGET_BASE}"'",
+  results: .,
+  errors: [],
+  paths: {scanned: []}
+}' "$TEMP_RESULTS" > "$OUTPUT_JSON"
+
+# JSON 검증
+if jq empty "$OUTPUT_JSON" 2>/dev/null; then
+    echo "  ✅ JSON 검증 성공"
+else
+    echo "  ❌ JSON 검증 실패! 기본 JSON 생성..."
+    cat > "$OUTPUT_JSON" << FALLBACK
 {
   "version": "1.0.0",
   "scan_type": "DAST",
-  "tool": "wpscan + nuclei + wfuzz + dalfox + sqlmap",
+  "tool": "combined",
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "target": "${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}",
-  "results": [
-JSONSTART
-
-# 임시 결과를 배열로 변환
-if [ -s "$TEMP_RESULTS" ]; then
-    jq -s '.' "$TEMP_RESULTS" 2>/dev/null | jq '.[]' | \
-    awk 'NR>1{print ","} {printf "%s", $0}' >> "${OUTPUT_JSON}"
+  "target": "${TARGET_BASE}",
+  "results": [],
+  "errors": ["JSON generation failed"],
+  "paths": {"scanned": []}
+}
+FALLBACK
 fi
 
-# JSON 종료
-cat >> "${OUTPUT_JSON}" << JSONEND
-  ],
-  "errors": [],
-  "paths": {
-    "scanned": ["${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}"]
-  }
-}
-JSONEND
-
-rm -f "$TEMP_RESULTS"
+rm -f "$TEMP_RESULTS" /tmp/*_converted_$$.json
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📊 최종 결과"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-
-total=$(jq '.results | length' "${OUTPUT_JSON}" 2>/dev/null || echo 0)
-zero_day=$(jq '[.results[] | select(.extra.metadata.zero_day == true)] | length' "${OUTPUT_JSON}" 2>/dev/null || echo 0)
-critical=$(jq '[.results[] | select(.extra.severity == "CRITICAL")] | length' "${OUTPUT_JSON}" 2>/dev/null || echo 0)
-high=$(jq '[.results[] | select(.extra.severity == "HIGH")] | length' "${OUTPUT_JSON}" 2>/dev/null || echo 0)
-
 echo "📄 파일: ${OUTPUT_JSON}"
 echo ""
-echo "통계:"
-echo "  총 취약점: ${total}개"
-echo "  🎯 제로데이: ${zero_day}개"
-echo "  🔴 Critical: ${critical}개"
-echo "  🟠 High: ${high}개"
-echo ""
 
-if [ "$zero_day" -gt 0 ]; then
-    echo "🎯 제로데이 목록:"
-    jq -r '.results[] | select(.extra.metadata.zero_day == true) | "  - \(.extra.metadata.parameter // .check_id): \(.extra.message)"' "${OUTPUT_JSON}" 2>/dev/null || true
+if [ -f "$OUTPUT_JSON" ]; then
+    echo "통계:"
+    jq -r '
+      "  총 취약점: \(.results | length)개",
+      "  🎯 제로데이: \([.results[] | select(.extra.metadata.zero_day == true)] | length)개",
+      "  🔴 Critical: \([.results[] | select(.extra.severity == "CRITICAL")] | length)개",
+      "  🟠 High: \([.results[] | select(.extra.severity == "HIGH")] | length)개",
+      "  🟡 Medium: \([.results[] | select(.extra.severity == "MEDIUM")] | length)개",
+      "  🔵 Info: \([.results[] | select(.extra.severity == "INFO")] | length)개"
+    ' "$OUTPUT_JSON" 2>/dev/null || echo "  통계 생성 실패"
 fi
+
+echo ""
