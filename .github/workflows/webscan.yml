@@ -10,10 +10,10 @@ permissions:
 
 jobs:
   dast-scan:
-    runs-on: ubuntu-latest
+    # ✅ 수정 1: self-hosted 사용 (VPC 내부 실행)
+    runs-on: self-hosted
     
     env:
-      # GitHub Secrets에서 가져오기
       TARGET_BASE: ${{ secrets.TARGET_URL }}
       WP_USERNAME: ${{ secrets.WP_USERNAME }}
       WP_PASSWORD: ${{ secrets.WP_PASSWORD }}
@@ -22,51 +22,61 @@ jobs:
     
     steps:
     # 1. 코드 체크아웃
-    - name: Checkout
+    - name: Checkout code
       uses: actions/checkout@v4
     
-    # 2. 도구 설치
+    # ✅ 수정 2: 연결 테스트 추가 (디버깅)
+    - name: 🔍 Check Connection & URL
+      run: |
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "🕵️ 연결 테스트 및 URL 확인"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Target: ${TARGET_BASE}"
+        curl -I -v --connect-timeout 5 "${TARGET_BASE}" || echo "❌ 연결 실패! 주소나 방화벽을 확인하세요."
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # 2. 도구 설치/업데이트
     - name: Install dependencies
       run: |
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📦 도구 설치 중..."
+        echo "📦 도구 설치/업데이트 중..."
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
+        # APT 업데이트 (조용히)
         sudo apt-get update -qq
         
-        # WPScan
+        # WPScan (Ruby)
         echo "▶ WPScan..."
-        sudo gem install wpscan
+        sudo gem install wpscan || echo "⚠️ WPScan already installed or error"
         
-        # Nuclei
+        # Nuclei (Go)
         echo "▶ Nuclei..."
         go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-        sudo ln -s ~/go/bin/nuclei /usr/local/bin/nuclei || true
+        sudo ln -sf ~/go/bin/nuclei /usr/local/bin/nuclei || true
+        # ✅ 수정 3: Nuclei 템플릿 업데이트 (필수!)
+        nuclei -update-templates
         
-        
-        # Dalfox
+        # Dalfox (Go)
         echo "▶ Dalfox..."
         go install github.com/hahwul/dalfox/v2@latest
-        sudo ln -s ~/go/bin/dalfox /usr/local/bin/dalfox || true
+        sudo ln -sf ~/go/bin/dalfox /usr/local/bin/dalfox || true
         
-        # SQLMap
-        echo "▶ SQLMap..."
-        sudo apt-get install -y sqlmap
+        # SQLMap & Utils
+        echo "▶ SQLMap & Utils..."
+        sudo apt-get install -y sqlmap jq bc python3-requests
         
-        # 기타 유틸리티
-        echo "▶ Utilities..."
-        sudo apt-get install -y jq bc python3-requests
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "✅ 도구 준비 완료!"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
+        # 도구 버전 확인
         echo ""
-        echo "✅ 도구 설치 완료!"
-        
-        # 버전 확인
-        echo ""
-        echo "도구 버전:"
-        wpscan --version || true
-        nuclei -version || true
-        dalfox version || true
-        sqlmap --version | head -1 || true
+        echo "🔧 설치된 도구 버전:"
+        wpscan --version || echo "WPScan: N/A"
+        nuclei -version || echo "Nuclei: N/A"
+        dalfox version || echo "Dalfox: N/A"
+        sqlmap --version | head -1 || echo "SQLMap: N/A"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     # 3. 준비
     - name: Prepare directories & permissions
@@ -76,16 +86,16 @@ jobs:
         chmod +x scripts/*.py
     
     # 4. WPScan (기존 CVE)
-    - name: "Scan 1/5: WPScan (Known CVE)"
+    - name: "1️⃣ WPScan - 기존 CVE 탐지"
       run: |
+        echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "1️⃣ WPScan - 기존 CVE 탐지"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         ./scripts/1_wpscan.sh || true
-      
     
     # 5. Nuclei (WordPress 템플릿)
-    - name: "Scan 2/5: Nuclei (WordPress Templates)"
+    - name: "2️⃣ Nuclei - WordPress 템플릿"
       run: |
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -94,7 +104,7 @@ jobs:
         ./scripts/2_nuclei.sh || true
     
     # 6. wfuzz (빠른 SQLi)
-    - name: "Scan 3/5: wfuzz (Fast SQLi Screening)"
+    - name: "3️⃣ wfuzz - 빠른 SQLi 스크리닝"
       run: |
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -103,7 +113,7 @@ jobs:
         ./scripts/3_wfuzz.sh || true
     
     # 7. Dalfox (XSS)
-    - name: "Scan 4/5: Dalfox (XSS Detection)"
+    - name: "4️⃣ Dalfox - XSS 탐지"
       run: |
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -112,16 +122,16 @@ jobs:
         ./scripts/4_dalfox.sh || true
     
     # 8. SQLMap (SQLi 확인)
-    - name: "Scan 5/5: SQLMap (SQLi Confirmation)"
+    - name: "5️⃣ SQLMap - 심층 SQLi 검증"
       run: |
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "5️⃣ SQLMap - SQLi 확인"
+        echo "5️⃣ SQLMap - 심층 SQLi 검증"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         ./scripts/5_sqlmap.sh || true
     
     # 9. JSON 통합
-    - name: Generate unified JSON report
+    - name: "📊 JSON 통합 (semgrep 형태)"
       run: |
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -130,17 +140,22 @@ jobs:
         ./scripts/6_generate_json.sh
         
         echo ""
-        echo "결과 미리보기:"
-        jq -C '. | {total: (.results | length), zero_day: [.results[] | select(.extra.metadata.zero_day == true)] | length}' results/dast_results.json || true
+        echo "📄 결과 미리보기:"
+        jq -C '. | {
+          "총 취약점": .results.total,
+          "제로데이": .results.zero_day
+        }' results/dast_results.json || true
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     # 10. 서버 업로드
-    - name: Upload results to dashboard
+    - name: "📤 서버 업로드"
       run: |
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "📤 서버 업로드"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        python3 scripts/7_upload.py results/dast_results.json
+        python3 scripts/7_upload.py
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       continue-on-error: true
     
     # 11. 결과 아티팩트 업로드 (GitHub)
@@ -150,6 +165,7 @@ jobs:
         name: dast-scan-results-${{ github.run_number }}
         path: results/
         retention-days: 30
+      if: always()
     
     # 12. 요약 출력
     - name: Print summary
@@ -159,23 +175,23 @@ jobs:
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "✅ 스캔 완료!"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
         
         if [ -f results/dast_results.json ]; then
           echo "📊 최종 통계:"
-          jq -r '
-            "  총 취약점: \(.results | length)개",
-            "  제로데이: \([.results[] | select(.extra.metadata.zero_day == true)] | length)개",
-            "  Critical: \([.results[] | select(.extra.severity == "CRITICAL")] | length)개",
-            "  High: \([.results[] | select(.extra.severity == "HIGH")] | length)개"
-          ' results/dast_results.json || true
+          jq '{
+            "총 취약점": .results.total,
+            "제로데이": .results.zero_day,
+            "Critical": (.results.vulnerabilities | map(select(.severity=="CRITICAL")) | length),
+            "High": (.results.vulnerabilities | map(select(.severity=="HIGH")) | length),
+            "Medium": (.results.vulnerabilities | map(select(.severity=="MEDIUM")) | length),
+            "Info": (.results.vulnerabilities | map(select(.severity=="INFO")) | length)
+          }' results/dast_results.json || true
           
           echo ""
           echo "📥 결과 다운로드:"
           echo "  Actions 탭 → Artifacts → 'dast-scan-results-${{ github.run_number }}'"
         else
-          echo "⚠️  결과 파일이 생성되지 않았습니다."
+          echo "⚠️ 결과 파일 없음"
         fi
         
-        echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
