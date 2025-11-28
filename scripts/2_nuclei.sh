@@ -1,6 +1,4 @@
 #!/bin/bash
-# 2_nuclei.sh - Nuclei WordPress 템플릿으로 CVE 탐지
-
 set -e
 
 TARGET_BASE="${TARGET_BASE:-http://localhost:8888/wordpress-zeroday}"
@@ -22,12 +20,10 @@ nuclei -update-templates 2>&1 | tail -1
 echo ""
 echo "🔍 WordPress 관련 템플릿 스캔 중..."
 
-# WordPress 관련 템플릿 실행 (jsonl 형식 사용)
+# ✅ 태그 기반 스캔 (경로 문제 없음!)
 nuclei -u "${TARGET_BASE}" \
-    -t cves/ \
-    -t wordpress/ \
-    -t vulnerabilities/ \
-    -tags wordpress,wp,wp-plugin,cve \
+    -tags wordpress,wp,wp-plugin,wp-theme,cve \
+    -severity critical,high,medium \
     -jsonl \
     -o "${OUTPUT_JSON}" \
     -silent \
@@ -47,4 +43,8 @@ if [ -f "${OUTPUT_JSON}" ]; then
         echo "템플릿 ID:"
         jq -r '.["template-id"]' "${OUTPUT_JSON}" 2>/dev/null | sort -u || true
     fi
+else
+    echo "⚠️ 결과 파일 없음"
 fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
